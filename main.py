@@ -59,9 +59,6 @@ class Loss:
         data_loss = np.mean(sample_losses)
         return data_loss
 
-    def forward(self, y_pred, y_true):
-        pass
-
 
 class Loss_CategoricalCrossentropy(Loss):
     def forward(self, y_pred, y_true):
@@ -87,6 +84,7 @@ class Loss_CategoricalCrossentropy(Loss):
         self.dinputs = -y_true / dvalues
         self.dinputs = self.dinputs / samples
 
+
 class Activation_Softmax_Loss_CategoricalCrossentropy:
     def __init__(self):
         self.activation = Activation_Softmax()
@@ -109,41 +107,91 @@ class Activation_Softmax_Loss_CategoricalCrossentropy:
 
 
 class GradientDescentOptimizer:
-    def __init__(self, learning_rate=0.01):
+    def __init__(self, learning_rate=1, decay=0, momentum=0):
         self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.momentum = momentum
+        self.iterations = 0
 
     def update_params(self, layer):
-        layer.weights += -self.learning_rate * layer.dweights
-        layer.biases += -self.learning_rate * layer.dbiases
+        if self.momentum:
+            # If layer does not contain momentum arrays, create them
+            # filled with zeros
+            if not hasattr(layer, "weight_momentums"):
+                layer.weight_momentums = np.zeros_like(layer.weights)
+                # If there is no momentum array for weights
+                # The array doesn't exist for biases yet either.
+                layer.bias_momentums = np.zeros_like(layer.biases)
+            # Build weight updates with momentum - take previous
+            # updates multiplied by retain factor and update with
+            # current gradients
+            weight_updates = (
+                self.momentum * layer.weight_momentums
+                - self.current_learning_rate * layer.dweights
+            )
+            layer.weight_momentums = weight_updates
+            # Build bias updates
+            bias_updates = (
+                self.momentum * layer.bias_momentums
+                - self.current_learning_rate * layer.dbiases
+            )
+            layer.bias_momentums = bias_updates
+            # Vanilla SGD updates (as before momentum update)
+        else:
+            weight_updates = -self.current_learning_rate * layer.dweights
+            bias_updates = -self.current_learning_rate * layer.dbiases
+        # Update weights and biases using either
+        # vanilla or momentum updates
+        layer.weights += weight_updates
+        layer.biases += bias_updates
+
+    def pre_update_params(self):
+        if self.decay:
+            self.current_learning_rate = self.learning_rate * (
+                1 / (1 + self.decay * self.iterations)
+            )
+
+    def post_update_params(self):
+        self.iterations += 1
 
 
 X, y = spiral_data(points=100, classes=3)
 
-dense1 = Layer_Dense(2, 64)  # Increased neurons in the hidden layer
+dense1 = Layer_Dense(2, 128)  # Increased neurons in the hidden layer
 activation1 = Activation_ReLU()
-dense2 = Layer_Dense(64, 3)  # Output layer neurons matches the number of classes..
-activation2 = Activation_Softmax()
-loss_function = Activation_Softmax_Loss_CategoricalCrossentropy()
+dense2 = Layer_Dense(128, 64)  # Output layer neurons matches the number of classes..
+activation2 = Activation_ReLU()
+dense3 = Layer_Dense(64,3)
+softmax_loss = Activation_Softmax_Loss_CategoricalCrossentropy()
 
-optimizer = GradientDescentOptimizer(learning_rate=0.05)
+optimizer = GradientDescentOptimizer(decay=1e-3, momentum=0.69)
 
-for i in range(10000):
+for i in range(10001):
     dense1.forward(X)
     activation1.forward(dense1.output)
     dense2.forward(activation1.output)
-    loss = loss_function.forward(dense2.output, y)
+    activation2.forward(dense2.output)
+    dense3.forward(activation2.output)
+    loss = softmax_loss.forward(dense3.output, y)
 
-    prediction = np.argmax(loss_function.output, axis=1)
+    prediction = np.argmax(softmax_loss.output, axis=1)
     accuracy = np.mean(prediction == y)
-    if len(y.shape) == 2:
-        y = np.argmax(y, axis=1)
     if i % 100 == 0:
-        print(f"epoch: {i} Loss: {loss:.3f} accuracy: {accuracy:.3f}")
+        print(
+            f"epoch: {i} Loss: {loss:.3f} accuracy: {accuracy:.3f} lr:{optimizer.current_learning_rate}"
+        )
 
-    loss_function.backward(loss_function.output, y)
-    dense2.backward(loss_function.dinputs)
+    softmax_loss.backward(softmax_loss.output, y)
+    dense3.backward(softmax_loss.dinputs)
+    activation2.backward(dense3.dinputs)
+    dense2.backward(activation2.dinputs)
     activation1.backward(dense2.dinputs)
     dense1.backward(activation1.dinputs)
 
+    # can you fix this
+    optimizer.pre_update_params()
     optimizer.update_params(dense1)
     optimizer.update_params(dense2)
+    optimizer.update_params(dense3)
+    optimizer.post_update_params()
